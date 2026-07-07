@@ -569,7 +569,7 @@ window.addEventListener("error", function (e) {
               eps ? h("button", {
                 style: Object.assign({}, styles.seasonMarkAll, { marginTop: 8 }),
                 onClick: function () { markEpisodesWatched(detailShow.id, allAiredIds, !isAllWatched); }
-              }, isAllWatched ? "Unmark everything aired" : "Mark everything aired") : null
+              }, isAllWatched ? "Unmark all aired episodes" : "Mark all aired episodes") : null
             ),
             h("button", { onClick: closeDetail, style: styles.iconButtonPlain }, Icons.x(18))
           ),
