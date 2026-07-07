@@ -111,6 +111,14 @@ window.addEventListener("error", function (e) {
     var error = errorState[0], setError = errorState[1];
     var menuOpenForState = useState(null);
     var menuOpenFor = menuOpenForState[0], setMenuOpenFor = menuOpenForState[1];
+    var detailShowIdState = useState(null);
+    var detailShowId = detailShowIdState[0], setDetailShowId = detailShowIdState[1];
+    var episodesCacheState = useState({});
+    var episodesCache = episodesCacheState[0], setEpisodesCache = episodesCacheState[1];
+    var episodesLoadingState = useState(false);
+    var episodesLoading = episodesLoadingState[0], setEpisodesLoading = episodesLoadingState[1];
+    var collapsedSeasonsState = useState({});
+    var collapsedSeasons = collapsedSeasonsState[0], setCollapsedSeasons = collapsedSeasonsState[1];
 
     useEffect(function () {
       try {
@@ -185,6 +193,63 @@ window.addEventListener("error", function (e) {
       setRefreshing(true); setError(null);
       Promise.all(shows.map(function (s) { return refreshOne(s); }))
         .finally(function () { setRefreshing(false); });
+    }
+
+    function openDetail(show) {
+      setDetailShowId(show.id);
+      setCollapsedSeasons({});
+      if (episodesCache[show.tvmazeId]) return;
+      setEpisodesLoading(true);
+      fetch(TVMAZE + "/shows/" + show.tvmazeId + "/episodes")
+        .then(function (r) { return r.json(); })
+        .then(function (eps) {
+          setEpisodesCache(function (prev) {
+            var next = Object.assign({}, prev);
+            next[show.tvmazeId] = eps;
+            return next;
+          });
+        })
+        .catch(function () { setError("Couldn't load episodes for this show."); })
+        .finally(function () { setEpisodesLoading(false); });
+    }
+
+    function closeDetail() { setDetailShowId(null); }
+
+    function toggleEpisodeWatched(showId, episodeId) {
+      setShows(function (prev) {
+        return prev.map(function (s) {
+          if (s.id !== showId) return s;
+          var watched = s.watchedEpisodeIds || [];
+          var isWatched = watched.indexOf(episodeId) !== -1;
+          var nextWatched = isWatched ? watched.filter(function (id) { return id !== episodeId; }) : watched.concat([episodeId]);
+          return Object.assign({}, s, { watchedEpisodeIds: nextWatched });
+        });
+      });
+    }
+
+    function markEpisodesWatched(showId, episodeIds, watched) {
+      setShows(function (prev) {
+        return prev.map(function (s) {
+          if (s.id !== showId) return s;
+          var current = s.watchedEpisodeIds || [];
+          var nextWatched;
+          if (watched) {
+            var toAdd = episodeIds.filter(function (id) { return current.indexOf(id) === -1; });
+            nextWatched = current.concat(toAdd);
+          } else {
+            nextWatched = current.filter(function (id) { return episodeIds.indexOf(id) === -1; });
+          }
+          return Object.assign({}, s, { watchedEpisodeIds: nextWatched });
+        });
+      });
+    }
+
+    function toggleSeasonCollapsed(seasonNum) {
+      setCollapsedSeasons(function (prev) {
+        var next = Object.assign({}, prev);
+        next[seasonNum] = !next[seasonNum];
+        return next;
+      });
     }
 
     function setStatus(showId, status) {
@@ -286,10 +351,24 @@ window.addEventListener("error", function (e) {
                 h("div", { style: styles.showName }, show.name),
                 h("div", { style: styles.showNetwork }, show.network),
                 show.nextAirdate ? h("div", { style: styles.airdate }, "Next: " + fmtDate(show.nextAirdate)) : null,
-                (!show.nextAirdate && show.lastAirdate) ? h("div", { style: styles.airdateMuted }, "Last aired " + fmtDate(show.lastAirdate)) : null
+                (!show.nextAirdate && show.lastAirdate) ? h("div", { style: styles.airdateMuted }, "Last aired " + fmtDate(show.lastAirdate)) : null,
+                (function () {
+                  var eps = episodesCache[show.tvmazeId];
+                  if (!eps) return null;
+                  var today = new Date().toISOString().slice(0, 10);
+                  var aired = eps.filter(function (e) { return e.airdate && e.airdate <= today; });
+                  var watchedSet = show.watchedEpisodeIds || [];
+                  var watchedCount = aired.filter(function (e) { return watchedSet.indexOf(e.id) !== -1; }).length;
+                  var pct = aired.length ? Math.round((watchedCount / aired.length) * 100) : 0;
+                  return h("div", null,
+                    h("div", { style: styles.progressBar }, h("div", { style: Object.assign({}, styles.progressFill, { width: pct + "%" }) })),
+                    h("div", { style: { fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: "#5A5F73", marginTop: 3 } }, watchedCount + "/" + aired.length + " episodes")
+                  );
+                })()
               )
             ),
-            h("div", { style: styles.cardFooter },
+            h("div", { style: Object.assign({}, styles.cardFooter, { justifyContent: "space-between" }) },
+              h("button", { style: styles.episodesButton, onClick: function () { openDetail(show); } }, "Episodes"),
               h("div", { style: { position: "relative" } },
                 h("button", { style: styles.moveButton, onClick: function () { setMenuOpenFor(menuOpenFor === show.id ? null : show.id); } }, "Move", Icons.chevron()),
                 menu
@@ -331,13 +410,91 @@ window.addEventListener("error", function (e) {
       )
     ) : null;
 
+    var detailShow = detailShowId ? shows.filter(function (s) { return s.id === detailShowId; })[0] : null;
+    var detailModal = null;
+    if (detailShow) {
+      var eps = episodesCache[detailShow.tvmazeId];
+      var today = new Date().toISOString().slice(0, 10);
+      var watchedSet = detailShow.watchedEpisodeIds || [];
+      var seasonsBody;
+      if (episodesLoading && !eps) {
+        seasonsBody = h("div", { style: styles.emptySub }, "Loading episodes…");
+      } else if (!eps || eps.length === 0) {
+        seasonsBody = h("div", { style: styles.emptySub }, "No episode data found for this show.");
+      } else {
+        var bySeasonMap = {};
+        eps.forEach(function (e) {
+          var sn = e.season;
+          if (!bySeasonMap[sn]) bySeasonMap[sn] = [];
+          bySeasonMap[sn].push(e);
+        });
+        var seasonNums = Object.keys(bySeasonMap).map(Number).sort(function (a, b) { return b - a; });
+        seasonsBody = seasonNums.map(function (sn) {
+          var seasonEps = bySeasonMap[sn];
+          var aired = seasonEps.filter(function (e) { return e.airdate && e.airdate <= today; });
+          var watchedCount = aired.filter(function (e) { return watchedSet.indexOf(e.id) !== -1; }).length;
+          var isCollapsed = !!collapsedSeasons[sn];
+          var rows = isCollapsed ? null : seasonEps.map(function (e) {
+            var isWatched = watchedSet.indexOf(e.id) !== -1;
+            var hasAired = e.airdate && e.airdate <= today;
+            return h("label", { key: e.id, style: Object.assign({}, styles.episodeRow, { opacity: hasAired ? 1 : 0.45 }) },
+              h("input", {
+                type: "checkbox", checked: isWatched, disabled: !hasAired, style: styles.episodeCheckbox,
+                onChange: function () { toggleEpisodeWatched(detailShow.id, e.id); }
+              }),
+              h("span", { style: styles.episodeNum }, "E" + e.number),
+              h("span", { style: styles.episodeName }, e.name || "Untitled"),
+              h("span", { style: styles.episodeDate }, hasAired ? fmtDate(e.airdate) : (e.airdate ? fmtDate(e.airdate) : "TBA"))
+            );
+          });
+          return h("div", { key: sn },
+            h("div", { style: styles.seasonHeader },
+              h("div", { style: styles.seasonTitle, onClick: function () { toggleSeasonCollapsed(sn); } },
+                h("span", { style: { display: "flex", transform: isCollapsed ? "rotate(-90deg)" : "none", transition: "transform 0.15s" } }, Icons.chevron()),
+                "Season " + sn
+              ),
+              h("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
+                h("span", { style: styles.seasonProgress }, watchedCount + "/" + aired.length),
+                h("button", {
+                  style: styles.seasonMarkAll,
+                  onClick: function () { markEpisodesWatched(detailShow.id, aired.map(function (e) { return e.id; }), watchedCount < aired.length); }
+                }, watchedCount < aired.length ? "Mark all seen" : "Unmark all")
+              )
+            ),
+            rows
+          );
+        });
+      }
+
+      var allAiredIds = eps ? eps.filter(function (e) { return e.airdate && e.airdate <= today; }).map(function (e) { return e.id; }) : [];
+
+      detailModal = h("div", { style: styles.detailBackdrop, onClick: closeDetail },
+        h("div", { style: styles.detailPanel, onClick: function (e) { e.stopPropagation(); } },
+          h("div", { style: styles.detailHeader },
+            detailShow.image ? h("img", { src: detailShow.image, alt: "", style: { width: 44, height: 62, borderRadius: 5, objectFit: "cover", flexShrink: 0 } }) : null,
+            h("div", { style: { flex: 1, minWidth: 0 } },
+              h("div", { style: styles.detailTitle }, detailShow.name),
+              h("div", { style: styles.detailSub }, detailShow.network),
+              eps ? h("button", {
+                style: Object.assign({}, styles.seasonMarkAll, { marginTop: 8 }),
+                onClick: function () { markEpisodesWatched(detailShow.id, allAiredIds, true); }
+              }, "Mark everything aired as watched") : null
+            ),
+            h("button", { onClick: closeDetail, style: styles.iconButtonPlain }, Icons.x(18))
+          ),
+          h("div", { style: styles.detailBody }, seasonsBody)
+        )
+      );
+    }
+
     return h("div", { style: styles.page },
       h("div", { style: styles.scanlines }),
       h("header", { style: styles.header }, headerLeft, headerRight),
       errorBanner,
       dial,
       h("main", { style: styles.main }, mainContent),
-      modal
+      modal,
+      detailModal
     );
   }
 
@@ -381,6 +538,24 @@ window.addEventListener("error", function (e) {
     airdateMuted: { fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#5A5F73", marginTop: 4 },
     cardFooter: { display: "flex", justifyContent: "flex-end" },
     moveButton: { display: "flex", alignItems: "center", gap: 4, background: "none", border: "1px solid #2A2E3A", color: "#8B8FA3", borderRadius: 7, padding: "6px 10px", fontSize: 12 },
+    episodesButton: { display: "flex", alignItems: "center", gap: 4, background: "none", border: "1px solid #2A2E3A", color: "#4FD1C5", borderRadius: 7, padding: "6px 10px", fontSize: 12 },
+    progressBar: { position: "relative", height: 5, background: "#262A35", borderRadius: 3, overflow: "hidden", marginTop: 6 },
+    progressFill: { position: "absolute", left: 0, top: 0, bottom: 0, background: "#4FD1C5", borderRadius: 3 },
+    detailBackdrop: { position: "fixed", inset: 0, background: "rgba(10,11,15,0.75)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 20 },
+    detailPanel: { width: "min(640px, 100vw)", background: "#1B1E27", borderRadius: "16px 16px 0 0", maxHeight: "88vh", display: "flex", flexDirection: "column", border: "1px solid #2A2E3A", borderBottom: "none" },
+    detailHeader: { display: "flex", alignItems: "flex-start", gap: 12, padding: "16px 18px", borderBottom: "1px solid #262A35" },
+    detailTitle: { fontSize: 16, fontWeight: 700 },
+    detailSub: { fontSize: 12, color: "#8B8FA3", marginTop: 3 },
+    detailBody: { overflowY: "auto", padding: "8px 18px 18px" },
+    seasonHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 4px", cursor: "pointer", borderBottom: "1px solid #21242E" },
+    seasonTitle: { display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 700 },
+    seasonProgress: { fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#8B8FA3" },
+    seasonMarkAll: { fontSize: 11, color: "#4FD1C5", background: "none", border: "1px solid rgba(79,209,197,0.35)", borderRadius: 6, padding: "4px 8px" },
+    episodeRow: { display: "flex", alignItems: "center", gap: 10, padding: "9px 4px", borderBottom: "1px solid #1E212B" },
+    episodeCheckbox: { width: 17, height: 17, accentColor: "#4FD1C5", flexShrink: 0 },
+    episodeNum: { fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#5A5F73", width: 28, flexShrink: 0 },
+    episodeName: { fontSize: 13, flex: 1, minWidth: 0 },
+    episodeDate: { fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: "#5A5F73", flexShrink: 0 },
     menu: { position: "absolute", bottom: "calc(100% + 6px)", right: 0, background: "#20232E", border: "1px solid #2A2E3A", borderRadius: 10, padding: 6, width: 190, zIndex: 5, boxShadow: "0 8px 24px rgba(0,0,0,0.4)" },
     menuItem: { display: "flex", alignItems: "center", gap: 8, width: "100%", background: "none", border: "none", color: "#EDEAE2", fontSize: 13, padding: "8px 8px", borderRadius: 6, textAlign: "left" },
     modalBackdrop: { position: "fixed", inset: 0, background: "rgba(10,11,15,0.7)", display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "10vh", zIndex: 10 },
