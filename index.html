@@ -360,7 +360,7 @@ window.addEventListener("error", function (e) {
           var menu = menuOpenFor === show.id ? h("div", { style: styles.menu },
             CATEGORIES.filter(function (c) { return c.key === "watching" || c.key === "havent_watched" || c.key === "watch_later" || c.key === "stopped_watching"; }).map(function (c) {
               return h("button", { key: c.key, style: styles.menuItem, onClick: function () { setStatus(show.id, c.key); } },
-                h("span", { style: { color: c.color, fontFamily: "'JetBrains Mono', monospace", fontSize: 11 } }, c.num),
+                h("span", { style: Object.assign({}, styles.dialDot, { background: c.color }) }),
                 c.label,
                 show.status === c.key ? h("span", { style: { marginLeft: "auto", display: "flex" } }, Icons.check()) : null
               );
