@@ -14,327 +14,391 @@
   ::selection { background: #4FD1C5; color: #14161C; }
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   @keyframes pulse { from { opacity: 1; } to { opacity: 0.3; } }
+  #boot-error { display:none; color:#FF9A90; font-family: monospace; padding: 20px; white-space: pre-wrap; }
 </style>
 </head>
 <body>
 <div id="root"></div>
+<div id="boot-error"></div>
 
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
 
-<script type="text/babel" data-presets="react">
-const { useState, useEffect, useCallback, useRef } = React;
+<script>
+window.addEventListener("error", function (e) {
+  var box = document.getElementById("boot-error");
+  box.style.display = "block";
+  box.textContent = "Something failed to load:\n" + (e.message || e);
+});
+</script>
 
-const CATEGORIES = [
-  { key: "watching", label: "Watching", num: "01", color: "#4FD1C5" },
-  { key: "havent_watched", label: "Haven't Watched", num: "02", color: "#8B8FA3" },
-  { key: "watch_later", label: "Watch Later", num: "03", color: "#F5A623" },
-  { key: "up_to_date", label: "Up to Date", num: "04", color: "#4FD1C5" },
-  { key: "finished", label: "Finished", num: "05", color: "#6B7280" },
-  { key: "stopped_watching", label: "Stopped Watching", num: "06", color: "#FF4B3E" },
-];
+<script>
+(function () {
+  if (typeof React === "undefined" || typeof ReactDOM === "undefined") {
+    var box = document.getElementById("boot-error");
+    box.style.display = "block";
+    box.textContent = "React failed to load from the CDN. Check your internet connection and refresh.";
+    return;
+  }
 
-const STORAGE_KEY = "signal-tv-tracker-shows-v1";
-const TVMAZE = "https://api.tvmaze.com";
+  var h = React.createElement;
+  var useState = React.useState;
+  var useEffect = React.useEffect;
 
-// --- tiny inline icon set (no external icon lib needed) ---
-const Icon = {
-  Search: (p) => (<svg width={p.size||16} height={p.size||16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>),
-  Plus: (p) => (<svg width={p.size||16} height={p.size||16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>),
-  X: (p) => (<svg width={p.size||16} height={p.size||16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>),
-  Tv: (p) => (<svg width={p.size||16} height={p.size||16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="7" width="20" height="14" rx="2"/><polyline points="17 2 12 7 7 2"/></svg>),
-  Refresh: (p) => (<svg width={p.size||16} height={p.size||16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>),
-  Chevron: (p) => (<svg width={p.size||13} height={p.size||13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><polyline points="6 9 12 15 18 9"/></svg>),
-  Check: (p) => (<svg width={p.size||13} height={p.size||13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>),
-};
+  var CATEGORIES = [
+    { key: "watching", label: "Watching", num: "01", color: "#4FD1C5" },
+    { key: "havent_watched", label: "Haven't Watched", num: "02", color: "#8B8FA3" },
+    { key: "watch_later", label: "Watch Later", num: "03", color: "#F5A623" },
+    { key: "up_to_date", label: "Up to Date", num: "04", color: "#4FD1C5" },
+    { key: "finished", label: "Finished", num: "05", color: "#6B7280" },
+    { key: "stopped_watching", label: "Stopped Watching", num: "06", color: "#FF4B3E" }
+  ];
 
-function useDebounce(value, delay) {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(value), delay);
-    return () => clearTimeout(t);
-  }, [value, delay]);
-  return debounced;
-}
+  var STORAGE_KEY = "signal-tv-tracker-shows-v1";
+  var TVMAZE = "https://api.tvmaze.com";
 
-function fmtDate(d) {
-  if (!d) return null;
-  try {
-    const date = new Date(d);
-    return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  } catch { return null; }
-}
+  function svgIcon(paths, size) {
+    size = size || 16;
+    return h("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2" }, paths);
+  }
+  var Icons = {
+    search: function (size) { return svgIcon([h("circle", { key: 1, cx: 11, cy: 11, r: 7 }), h("line", { key: 2, x1: 21, y1: 21, x2: 16.65, y2: 16.65 })], size); },
+    plus: function (size) { return svgIcon([h("line", { key: 1, x1: 12, y1: 5, x2: 12, y2: 19 }), h("line", { key: 2, x1: 5, y1: 12, x2: 19, y2: 12 })], size); },
+    x: function (size) { return svgIcon([h("line", { key: 1, x1: 18, y1: 6, x2: 6, y2: 18 }), h("line", { key: 2, x1: 6, y1: 6, x2: 18, y2: 18 })], size); },
+    tv: function (size) { return svgIcon([h("rect", { key: 1, x: 2, y: 7, width: 20, height: 14, rx: 2 }), h("polyline", { key: 2, points: "17 2 12 7 7 2" })], size); },
+    refresh: function (size) { return svgIcon([h("polyline", { key: 1, points: "23 4 23 10 17 10" }), h("polyline", { key: 2, points: "1 20 1 14 7 14" }), h("path", { key: 3, d: "M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" })], size); },
+    chevron: function (size) { return svgIcon([h("polyline", { key: 1, points: "6 9 12 15 18 9" })], size || 13); },
+    check: function (size) { return svgIcon([h("polyline", { key: 1, points: "20 6 9 17 4 12" })], size || 13); }
+  };
 
-function ShowTracker() {
-  const [shows, setShows] = useState([]);
-  const [loaded, setLoaded] = useState(false);
-  const [activeTab, setActiveTab] = useState("watching");
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const debouncedQuery = useDebounce(query, 350);
-  const [searchResults, setSearchResults] = useState([]);
-  const [searching, setSearching] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState(null);
-  const [menuOpenFor, setMenuOpenFor] = useState(null);
+  function useDebounce(value, delay) {
+    var state = useState(value);
+    var debounced = state[0], setDebounced = state[1];
+    useEffect(function () {
+      var t = setTimeout(function () { setDebounced(value); }, delay);
+      return function () { clearTimeout(t); };
+    }, [value, delay]);
+    return debounced;
+  }
 
-  useEffect(() => {
+  function fmtDate(d) {
+    if (!d) return null;
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) setShows(JSON.parse(raw));
-    } catch (e) { /* ignore corrupt/missing data */ }
-    setLoaded(true);
-  }, []);
-
-  useEffect(() => {
-    if (!loaded) return;
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(shows)); }
-    catch (e) { setError("Couldn't save your changes locally."); }
-  }, [shows, loaded]);
-
-  useEffect(() => {
-    if (!debouncedQuery.trim()) { setSearchResults([]); return; }
-    let cancelled = false;
-    setSearching(true);
-    fetch(`${TVMAZE}/search/shows?q=${encodeURIComponent(debouncedQuery)}`)
-      .then((r) => r.json())
-      .then((data) => { if (!cancelled) { setSearchResults(data.slice(0, 8)); setError(null); } })
-      .catch(() => { if (!cancelled) setError("Couldn't reach the show database. Check your connection."); })
-      .finally(() => { if (!cancelled) setSearching(false); });
-    return () => { cancelled = true; };
-  }, [debouncedQuery]);
-
-  async function addShow(result) {
-    const s = result.show;
-    if (shows.some((sh) => sh.tvmazeId === s.id)) { setSearchOpen(false); setQuery(""); return; }
-    const newShow = {
-      id: `${s.id}-${Date.now()}`,
-      tvmazeId: s.id,
-      name: s.name,
-      image: s.image?.medium || null,
-      network: s.network?.name || s.webChannel?.name || "Unknown",
-      status: "havent_watched",
-      lastSeenEpisodeId: null,
-      nextAirdate: null,
-      lastAirdate: null,
-      hasNew: false,
-    };
-    setShows((prev) => [newShow, ...prev]);
-    setSearchOpen(false); setQuery(""); setSearchResults([]);
-    refreshOne(newShow);
+      var date = new Date(d);
+      return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    } catch (e) { return null; }
   }
 
-  async function refreshOne(show) {
-    try {
-      const res = await fetch(`${TVMAZE}/shows/${show.tvmazeId}?embed[]=previousepisode&embed[]=nextepisode`);
-      const data = await res.json();
-      const prevEp = data._embedded?.previousepisode;
-      const nextEp = data._embedded?.nextepisode;
-      setShows((prev) => prev.map((sh) => {
-        if (sh.tvmazeId !== show.tvmazeId) return sh;
-        const newEpAired = prevEp && sh.lastSeenEpisodeId && prevEp.id !== sh.lastSeenEpisodeId;
-        const firstCheck = prevEp && sh.lastSeenEpisodeId === null;
-        return {
-          ...sh,
-          lastAirdate: prevEp?.airdate || null,
-          nextAirdate: nextEp?.airdate || null,
-          hasNew: firstCheck ? false : !!newEpAired,
-          lastSeenEpisodeId: prevEp ? prevEp.id : sh.lastSeenEpisodeId,
-        };
-      }));
-    } catch { /* per-show failure is fine, skip silently */ }
+  function App() {
+    var showsState = useState([]);
+    var shows = showsState[0], setShows = showsState[1];
+    var loadedState = useState(false);
+    var loaded = loadedState[0], setLoaded = loadedState[1];
+    var activeTabState = useState("watching");
+    var activeTab = activeTabState[0], setActiveTab = activeTabState[1];
+    var searchOpenState = useState(false);
+    var searchOpen = searchOpenState[0], setSearchOpen = searchOpenState[1];
+    var queryState = useState("");
+    var query = queryState[0], setQuery = queryState[1];
+    var debouncedQuery = useDebounce(query, 350);
+    var searchResultsState = useState([]);
+    var searchResults = searchResultsState[0], setSearchResults = searchResultsState[1];
+    var searchingState = useState(false);
+    var searching = searchingState[0], setSearching = searchingState[1];
+    var refreshingState = useState(false);
+    var refreshing = refreshingState[0], setRefreshing = refreshingState[1];
+    var errorState = useState(null);
+    var error = errorState[0], setError = errorState[1];
+    var menuOpenForState = useState(null);
+    var menuOpenFor = menuOpenForState[0], setMenuOpenFor = menuOpenForState[1];
+
+    useEffect(function () {
+      try {
+        var raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) setShows(JSON.parse(raw));
+      } catch (e) {}
+      setLoaded(true);
+    }, []);
+
+    useEffect(function () {
+      if (!loaded) return;
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(shows)); }
+      catch (e) { setError("Couldn't save your changes locally."); }
+    }, [shows, loaded]);
+
+    useEffect(function () {
+      if (!debouncedQuery.trim()) { setSearchResults([]); return; }
+      var cancelled = false;
+      setSearching(true);
+      fetch(TVMAZE + "/search/shows?q=" + encodeURIComponent(debouncedQuery))
+        .then(function (r) { return r.json(); })
+        .then(function (data) { if (!cancelled) { setSearchResults(data.slice(0, 8)); setError(null); } })
+        .catch(function () { if (!cancelled) setError("Couldn't reach the show database. Check your connection."); })
+        .finally(function () { if (!cancelled) setSearching(false); });
+      return function () { cancelled = true; };
+    }, [debouncedQuery]);
+
+    function addShow(result) {
+      var s = result.show;
+      if (shows.some(function (sh) { return sh.tvmazeId === s.id; })) { setSearchOpen(false); setQuery(""); return; }
+      var newShow = {
+        id: s.id + "-" + Date.now(),
+        tvmazeId: s.id,
+        name: s.name,
+        image: s.image ? s.image.medium : null,
+        network: (s.network && s.network.name) || (s.webChannel && s.webChannel.name) || "Unknown",
+        status: "havent_watched",
+        lastSeenEpisodeId: null,
+        nextAirdate: null,
+        lastAirdate: null,
+        hasNew: false
+      };
+      setShows(function (prev) { return [newShow].concat(prev); });
+      setSearchOpen(false); setQuery(""); setSearchResults([]);
+      refreshOne(newShow);
+    }
+
+    function refreshOne(show) {
+      fetch(TVMAZE + "/shows/" + show.tvmazeId + "?embed[]=previousepisode&embed[]=nextepisode")
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          var prevEp = data._embedded && data._embedded.previousepisode;
+          var nextEp = data._embedded && data._embedded.nextepisode;
+          setShows(function (prev) {
+            return prev.map(function (sh) {
+              if (sh.tvmazeId !== show.tvmazeId) return sh;
+              var newEpAired = prevEp && sh.lastSeenEpisodeId && prevEp.id !== sh.lastSeenEpisodeId;
+              var firstCheck = prevEp && sh.lastSeenEpisodeId === null;
+              return Object.assign({}, sh, {
+                lastAirdate: (prevEp && prevEp.airdate) || null,
+                nextAirdate: (nextEp && nextEp.airdate) || null,
+                hasNew: firstCheck ? false : !!newEpAired,
+                lastSeenEpisodeId: prevEp ? prevEp.id : sh.lastSeenEpisodeId
+              });
+            });
+          });
+        })
+        .catch(function () {});
+    }
+
+    function refreshAll() {
+      setRefreshing(true); setError(null);
+      Promise.all(shows.map(function (s) { return refreshOne(s); }))
+        .finally(function () { setRefreshing(false); });
+    }
+
+    function setStatus(showId, status) {
+      setShows(function (prev) {
+        return prev.map(function (s) {
+          if (s.id !== showId) return s;
+          return Object.assign({}, s, { status: status, hasNew: status === "up_to_date" ? false : s.hasNew });
+        });
+      });
+      setMenuOpenFor(null);
+    }
+    function dismissNew(showId) {
+      setShows(function (prev) { return prev.map(function (s) { return s.id === showId ? Object.assign({}, s, { hasNew: false }) : s; }); });
+    }
+    function removeShow(showId) {
+      setShows(function (prev) { return prev.filter(function (s) { return s.id !== showId; }); });
+      setMenuOpenFor(null);
+    }
+
+    var newCount = shows.filter(function (s) { return s.hasNew; }).length;
+    var activeCat = CATEGORIES.filter(function (c) { return c.key === activeTab; })[0];
+    var visibleShows = shows.filter(function (s) { return s.status === activeTab; });
+    var countsByCategory = {};
+    var newByCategory = {};
+    CATEGORIES.forEach(function (c) {
+      countsByCategory[c.key] = shows.filter(function (s) { return s.status === c.key; }).length;
+      newByCategory[c.key] = shows.some(function (s) { return s.status === c.key && s.hasNew; });
+    });
+
+    var headerLeft = h("div", { style: styles.headerLeft },
+      h("div", { style: styles.logoMark },
+        h("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "#14161C", strokeWidth: "2" },
+          h("path", { d: "M9 19V6l12-3v13" }),
+          h("circle", { cx: 6, cy: 18, r: 3 }),
+          h("circle", { cx: 18, cy: 16, r: 3 })
+        )
+      ),
+      h("div", null,
+        h("div", { style: styles.logoTitle }, "SIGNAL"),
+        h("div", { style: styles.logoSub }, "your channel guide")
+      )
+    );
+
+    var headerRight = h("div", { style: styles.headerRight },
+      newCount > 0 ? h("div", { style: styles.onAirBadge }, h("span", { style: styles.onAirDot }), newCount + " NOW AIRING") : null,
+      h("button", {
+        onClick: refreshAll, disabled: refreshing || shows.length === 0, style: styles.iconButton, title: "Check for new episodes"
+      }, h("span", { style: { display: "flex", animation: refreshing ? "spin 1s linear infinite" : "none" } }, Icons.refresh())),
+      h("button", { onClick: function () { setSearchOpen(true); }, style: styles.addButton }, Icons.plus(), "Add show")
+    );
+
+    var errorBanner = error ? h("div", { style: styles.errorBanner }, error,
+      h("button", { onClick: function () { setError(null); }, style: styles.errorDismiss }, Icons.x(14))
+    ) : null;
+
+    var dial = h("nav", { style: styles.dial },
+      CATEGORIES.map(function (c) {
+        var activeStyle = activeTab === c.key ? Object.assign({}, styles.dialButtonActive, { boxShadow: "0 0 0 1.5px " + c.color + " inset" }) : {};
+        return h("button", {
+          key: c.key, onClick: function () { setActiveTab(c.key); },
+          style: Object.assign({}, styles.dialButton, activeStyle)
+        },
+          h("span", { style: Object.assign({}, styles.dialNum, { color: activeTab === c.key ? c.color : "#5A5F73" }) }, c.num),
+          h("span", { style: styles.dialLabel }, c.label),
+          h("span", { style: styles.dialCount }, countsByCategory[c.key]),
+          newByCategory[c.key] ? h("span", { style: Object.assign({}, styles.dialLight, { background: "#FF4B3E" }) }) : null
+        );
+      })
+    );
+
+    var mainContent;
+    if (!loaded) {
+      mainContent = h("div", { style: styles.emptyState }, "Tuning in…");
+    } else if (visibleShows.length === 0) {
+      mainContent = h("div", { style: styles.emptyState },
+        Icons.tv(28),
+        h("div", { style: styles.emptyTitle }, "Nothing on " + activeCat.label),
+        h("div", { style: styles.emptySub }, shows.length === 0 ? "Add your first show to start tracking." : "Move a show here, or add a new one.")
+      );
+    } else {
+      mainContent = h("div", { style: styles.grid },
+        visibleShows.map(function (show) {
+          var menu = menuOpenFor === show.id ? h("div", { style: styles.menu },
+            CATEGORIES.map(function (c) {
+              return h("button", { key: c.key, style: styles.menuItem, onClick: function () { setStatus(show.id, c.key); } },
+                h("span", { style: { color: c.color, fontFamily: "'JetBrains Mono', monospace", fontSize: 11 } }, c.num),
+                c.label,
+                show.status === c.key ? h("span", { style: { marginLeft: "auto", display: "flex" } }, Icons.check()) : null
+              );
+            }),
+            h("button", { style: Object.assign({}, styles.menuItem, { color: "#FF4B3E", borderTop: "1px solid #2A2E3A" }), onClick: function () { removeShow(show.id); } }, "Remove show")
+          ) : null;
+
+          return h("div", { key: show.id, style: styles.card },
+            show.hasNew ? h("div", { style: styles.newBadge, onClick: function () { dismissNew(show.id); }, title: "Mark as seen" }, h("span", { style: styles.onAirDot }), "NEW EPISODE") : null,
+            h("div", { style: styles.cardTop },
+              show.image ? h("img", { src: show.image, alt: show.name, style: styles.poster }) : h("div", { style: styles.posterFallback }, Icons.tv(20)),
+              h("div", { style: styles.cardInfo },
+                h("div", { style: styles.showName }, show.name),
+                h("div", { style: styles.showNetwork }, show.network),
+                show.nextAirdate ? h("div", { style: styles.airdate }, "Next: " + fmtDate(show.nextAirdate)) : null,
+                (!show.nextAirdate && show.lastAirdate) ? h("div", { style: styles.airdateMuted }, "Last aired " + fmtDate(show.lastAirdate)) : null
+              )
+            ),
+            h("div", { style: styles.cardFooter },
+              h("div", { style: { position: "relative" } },
+                h("button", { style: styles.moveButton, onClick: function () { setMenuOpenFor(menuOpenFor === show.id ? null : show.id); } }, "Move", Icons.chevron()),
+                menu
+              )
+            )
+          );
+        })
+      );
+    }
+
+    var modal = searchOpen ? h("div", { style: styles.modalBackdrop, onClick: function () { setSearchOpen(false); } },
+      h("div", { style: styles.modal, onClick: function (e) { e.stopPropagation(); } },
+        h("div", { style: styles.modalHeader },
+          Icons.search(),
+          h("input", {
+            autoFocus: true, value: query, onChange: function (e) { setQuery(e.target.value); },
+            placeholder: "Search any show, from anywhere…", style: styles.searchInput
+          }),
+          h("button", { onClick: function () { setSearchOpen(false); }, style: styles.iconButtonPlain }, Icons.x(18))
+        ),
+        h("div", { style: styles.resultsList },
+          searching ? h("div", { style: styles.emptySub }, "Searching…") : null,
+          (!searching && debouncedQuery && searchResults.length === 0) ? h("div", { style: styles.emptySub }, "No shows found.") : null,
+          searchResults.map(function (r) {
+            var already = shows.some(function (sh) { return sh.tvmazeId === r.show.id; });
+            return h("button", {
+              key: r.show.id, onClick: function () { addShow(r); }, disabled: already,
+              style: Object.assign({}, styles.resultRow, { opacity: already ? 0.5 : 1 })
+            },
+              r.show.image ? h("img", { src: r.show.image.medium, alt: "", style: styles.resultThumb }) : h("div", { style: styles.resultThumbFallback }, Icons.tv(16)),
+              h("div", { style: { textAlign: "left", flex: 1 } },
+                h("div", { style: styles.resultName }, r.show.name),
+                h("div", { style: styles.resultMeta }, (r.show.premiered ? r.show.premiered.slice(0, 4) : "—") + " · " + ((r.show.network && r.show.network.name) || (r.show.webChannel && r.show.webChannel.name) || "Unknown network"))
+              ),
+              already ? h("span", { style: styles.alreadyTag }, "Added") : h("span", { style: { color: "#4FD1C5", display: "flex" } }, Icons.plus())
+            );
+          })
+        )
+      )
+    ) : null;
+
+    return h("div", { style: styles.page },
+      h("div", { style: styles.scanlines }),
+      h("header", { style: styles.header }, headerLeft, headerRight),
+      errorBanner,
+      dial,
+      h("main", { style: styles.main }, mainContent),
+      modal
+    );
   }
 
-  async function refreshAll() {
-    setRefreshing(true); setError(null);
-    try { for (const s of shows) { await refreshOne(s); } }
-    finally { setRefreshing(false); }
-  }
+  var styles = {
+    page: { minHeight: "100vh", background: "#14161C", color: "#EDEAE2", fontFamily: "'Space Grotesk', system-ui, sans-serif", position: "relative", paddingBottom: 40 },
+    scanlines: { position: "fixed", inset: 0, pointerEvents: "none", backgroundImage: "repeating-linear-gradient(0deg, rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 3px)", zIndex: 0 },
+    header: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "20px 24px 16px", flexWrap: "wrap", gap: 12, position: "relative", zIndex: 1 },
+    headerLeft: { display: "flex", alignItems: "center", gap: 10 },
+    logoMark: { width: 32, height: 32, borderRadius: 8, background: "#4FD1C5", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
+    logoTitle: { fontFamily: "'JetBrains Mono', monospace", fontSize: 15, fontWeight: 700, letterSpacing: "0.12em", lineHeight: 1 },
+    logoSub: { fontSize: 11, color: "#8B8FA3", marginTop: 3 },
+    headerRight: { display: "flex", alignItems: "center", gap: 10 },
+    onAirBadge: { display: "flex", alignItems: "center", gap: 6, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, letterSpacing: "0.06em", color: "#FF4B3E", border: "1px solid rgba(255,75,62,0.4)", borderRadius: 20, padding: "5px 10px", background: "rgba(255,75,62,0.08)" },
+    onAirDot: { width: 6, height: 6, borderRadius: "50%", background: "#FF4B3E", display: "inline-block", animation: "pulse 1s ease-in-out infinite alternate" },
+    iconButton: { width: 34, height: 34, borderRadius: 8, border: "1px solid #2A2E3A", background: "#1B1E27", color: "#8B8FA3", display: "flex", alignItems: "center", justifyContent: "center" },
+    iconButtonPlain: { background: "none", border: "none", color: "#8B8FA3", display: "flex" },
+    addButton: { display: "flex", alignItems: "center", gap: 6, background: "#EDEAE2", color: "#14161C", border: "none", borderRadius: 8, padding: "9px 14px", fontSize: 13, fontWeight: 600 },
+    errorBanner: { margin: "0 24px 12px", background: "rgba(255,75,62,0.1)", border: "1px solid rgba(255,75,62,0.35)", color: "#FF9A90", borderRadius: 8, padding: "10px 14px", fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, position: "relative", zIndex: 1 },
+    errorDismiss: { background: "none", border: "none", color: "#FF9A90", display: "flex" },
+    dial: { display: "flex", gap: 8, padding: "0 24px 20px", overflowX: "auto", position: "relative", zIndex: 1 },
+    dialButton: { position: "relative", display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2, minWidth: 128, background: "#1B1E27", border: "1px solid #262A35", borderRadius: 10, padding: "10px 12px", color: "#8B8FA3", flexShrink: 0 },
+    dialButtonActive: { background: "#20232E", color: "#EDEAE2" },
+    dialNum: { fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 700 },
+    dialLabel: { fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap" },
+    dialCount: { fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: "#5A5F73" },
+    dialLight: { position: "absolute", top: 8, right: 8, width: 6, height: 6, borderRadius: "50%" },
+    main: { padding: "0 24px", position: "relative", zIndex: 1 },
+    emptyState: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "60px 20px", color: "#8B8FA3", textAlign: "center", gap: 4 },
+    emptyTitle: { fontSize: 15, fontWeight: 600, color: "#EDEAE2", marginTop: 8 },
+    emptySub: { fontSize: 13, color: "#8B8FA3" },
+    grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 },
+    card: { background: "#1B1E27", border: "1px solid #262A35", borderRadius: 12, padding: 14, position: "relative", display: "flex", flexDirection: "column", gap: 10 },
+    newBadge: { position: "absolute", top: -9, left: 12, background: "#FF4B3E", color: "#14161C", fontFamily: "'JetBrains Mono', monospace", fontSize: 9.5, fontWeight: 700, letterSpacing: "0.05em", padding: "3px 8px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" },
+    cardTop: { display: "flex", gap: 12 },
+    poster: { width: 56, height: 78, borderRadius: 6, objectFit: "cover", flexShrink: 0 },
+    posterFallback: { width: 56, height: 78, borderRadius: 6, background: "#262A35", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
+    cardInfo: { display: "flex", flexDirection: "column", gap: 3, minWidth: 0 },
+    showName: { fontSize: 14, fontWeight: 700, lineHeight: 1.25 },
+    showNetwork: { fontSize: 11.5, color: "#8B8FA3" },
+    airdate: { fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#4FD1C5", marginTop: 4 },
+    airdateMuted: { fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#5A5F73", marginTop: 4 },
+    cardFooter: { display: "flex", justifyContent: "flex-end" },
+    moveButton: { display: "flex", alignItems: "center", gap: 4, background: "none", border: "1px solid #2A2E3A", color: "#8B8FA3", borderRadius: 7, padding: "6px 10px", fontSize: 12 },
+    menu: { position: "absolute", bottom: "calc(100% + 6px)", right: 0, background: "#20232E", border: "1px solid #2A2E3A", borderRadius: 10, padding: 6, width: 190, zIndex: 5, boxShadow: "0 8px 24px rgba(0,0,0,0.4)" },
+    menuItem: { display: "flex", alignItems: "center", gap: 8, width: "100%", background: "none", border: "none", color: "#EDEAE2", fontSize: 13, padding: "8px 8px", borderRadius: 6, textAlign: "left" },
+    modalBackdrop: { position: "fixed", inset: 0, background: "rgba(10,11,15,0.7)", display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "10vh", zIndex: 10 },
+    modal: { width: "min(520px, 92vw)", background: "#1B1E27", border: "1px solid #2A2E3A", borderRadius: 14, overflow: "hidden", maxHeight: "70vh", display: "flex", flexDirection: "column" },
+    modalHeader: { display: "flex", alignItems: "center", gap: 10, padding: "14px 16px", borderBottom: "1px solid #262A35" },
+    searchInput: { flex: 1, background: "none", border: "none", outline: "none", color: "#EDEAE2", fontSize: 14 },
+    resultsList: { overflowY: "auto", padding: 8 },
+    resultRow: { display: "flex", alignItems: "center", gap: 10, width: "100%", background: "none", border: "none", padding: 8, borderRadius: 8, color: "#EDEAE2" },
+    resultThumb: { width: 34, height: 46, borderRadius: 4, objectFit: "cover", flexShrink: 0 },
+    resultThumbFallback: { width: 34, height: 46, borderRadius: 4, background: "#262A35", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
+    resultName: { fontSize: 13.5, fontWeight: 600 },
+    resultMeta: { fontSize: 11.5, color: "#8B8FA3", marginTop: 2 },
+    alreadyTag: { fontSize: 10.5, color: "#5A5F73", fontFamily: "'JetBrains Mono', monospace" }
+  };
 
-  function setStatus(showId, status) {
-    setShows((prev) => prev.map((s) => s.id === showId ? { ...s, status, hasNew: status === "up_to_date" ? false : s.hasNew } : s));
-    setMenuOpenFor(null);
-  }
-  function dismissNew(showId) {
-    setShows((prev) => prev.map((s) => s.id === showId ? { ...s, hasNew: false } : s));
-  }
-  function removeShow(showId) {
-    setShows((prev) => prev.filter((s) => s.id !== showId));
-    setMenuOpenFor(null);
-  }
-
-  const newCount = shows.filter((s) => s.hasNew).length;
-  const activeCat = CATEGORIES.find((c) => c.key === activeTab);
-  const visibleShows = shows.filter((s) => s.status === activeTab);
-  const countsByCategory = Object.fromEntries(CATEGORIES.map((c) => [c.key, shows.filter((s) => s.status === c.key).length]));
-  const newByCategory = Object.fromEntries(CATEGORIES.map((c) => [c.key, shows.some((s) => s.status === c.key && s.hasNew)]));
-
-  return (
-    <div style={styles.page}>
-      <div style={styles.scanlines} />
-      <header style={styles.header}>
-        <div style={styles.headerLeft}>
-          <div style={styles.logoMark}><Icon.Search size={0} /><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#14161C" strokeWidth="2"><path d="M9 19V6l12-3v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>
-          <div><div style={styles.logoTitle}>SIGNAL</div><div style={styles.logoSub}>your channel guide</div></div>
-        </div>
-        <div style={styles.headerRight}>
-          {newCount > 0 && (<div style={styles.onAirBadge}><span style={styles.onAirDot} />{newCount} NOW AIRING</div>)}
-          <button onClick={refreshAll} disabled={refreshing || shows.length === 0} style={styles.iconButton} title="Check for new episodes">
-            <span style={{ display: "flex", animation: refreshing ? "spin 1s linear infinite" : "none" }}><Icon.Refresh /></span>
-          </button>
-          <button onClick={() => setSearchOpen(true)} style={styles.addButton}><Icon.Plus />Add show</button>
-        </div>
-      </header>
-
-      {error && (<div style={styles.errorBanner}>{error}<button onClick={() => setError(null)} style={styles.errorDismiss}><Icon.X size={14} /></button></div>)}
-
-      <nav style={styles.dial}>
-        {CATEGORIES.map((c) => (
-          <button key={c.key} onClick={() => setActiveTab(c.key)}
-            style={{ ...styles.dialButton, ...(activeTab === c.key ? styles.dialButtonActive : {}), ...(activeTab === c.key ? { boxShadow: `0 0 0 1.5px ${c.color} inset` } : {}) }}>
-            <span style={{ ...styles.dialNum, color: activeTab === c.key ? c.color : "#5A5F73" }}>{c.num}</span>
-            <span style={styles.dialLabel}>{c.label}</span>
-            <span style={styles.dialCount}>{countsByCategory[c.key]}</span>
-            {newByCategory[c.key] && <span style={{ ...styles.dialLight, background: "#FF4B3E" }} />}
-          </button>
-        ))}
-      </nav>
-
-      <main style={styles.main}>
-        {!loaded ? (<div style={styles.emptyState}>Tuning in…</div>) :
-        visibleShows.length === 0 ? (
-          <div style={styles.emptyState}>
-            <Icon.Tv size={28} />
-            <div style={styles.emptyTitle}>Nothing on {activeCat.label}</div>
-            <div style={styles.emptySub}>{shows.length === 0 ? "Add your first show to start tracking." : "Move a show here, or add a new one."}</div>
-          </div>
-        ) : (
-          <div style={styles.grid}>
-            {visibleShows.map((show) => (
-              <div key={show.id} style={styles.card}>
-                {show.hasNew && (<div style={styles.newBadge} onClick={() => dismissNew(show.id)} title="Mark as seen"><span style={styles.onAirDot} />NEW EPISODE</div>)}
-                <div style={styles.cardTop}>
-                  {show.image ? (<img src={show.image} alt={show.name} style={styles.poster} />) : (<div style={styles.posterFallback}><Icon.Tv size={20} /></div>)}
-                  <div style={styles.cardInfo}>
-                    <div style={styles.showName}>{show.name}</div>
-                    <div style={styles.showNetwork}>{show.network}</div>
-                    {show.nextAirdate && (<div style={styles.airdate}>Next: {fmtDate(show.nextAirdate)}</div>)}
-                    {!show.nextAirdate && show.lastAirdate && (<div style={styles.airdateMuted}>Last aired {fmtDate(show.lastAirdate)}</div>)}
-                  </div>
-                </div>
-                <div style={styles.cardFooter}>
-                  <div style={{ position: "relative" }}>
-                    <button style={styles.moveButton} onClick={() => setMenuOpenFor(menuOpenFor === show.id ? null : show.id)}>Move<Icon.Chevron /></button>
-                    {menuOpenFor === show.id && (
-                      <div style={styles.menu}>
-                        {CATEGORIES.map((c) => (
-                          <button key={c.key} style={styles.menuItem} onClick={() => setStatus(show.id, c.key)}>
-                            <span style={{ color: c.color, fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}>{c.num}</span>
-                            {c.label}
-                            {show.status === c.key && <span style={{ marginLeft: "auto", display: "flex" }}><Icon.Check /></span>}
-                          </button>
-                        ))}
-                        <button style={{ ...styles.menuItem, color: "#FF4B3E", borderTop: "1px solid #2A2E3A" }} onClick={() => removeShow(show.id)}>Remove show</button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </main>
-
-      {searchOpen && (
-        <div style={styles.modalBackdrop} onClick={() => setSearchOpen(false)}>
-          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
-            <div style={styles.modalHeader}>
-              <Icon.Search />
-              <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search any show, from anywhere…" style={styles.searchInput} />
-              <button onClick={() => setSearchOpen(false)} style={styles.iconButtonPlain}><Icon.X size={18} /></button>
-            </div>
-            <div style={styles.resultsList}>
-              {searching && <div style={styles.emptySub}>Searching…</div>}
-              {!searching && debouncedQuery && searchResults.length === 0 && <div style={styles.emptySub}>No shows found.</div>}
-              {searchResults.map((r) => {
-                const already = shows.some((sh) => sh.tvmazeId === r.show.id);
-                return (
-                  <button key={r.show.id} onClick={() => addShow(r)} disabled={already} style={{ ...styles.resultRow, opacity: already ? 0.5 : 1 }}>
-                    {r.show.image ? (<img src={r.show.image.medium} alt="" style={styles.resultThumb} />) : (<div style={styles.resultThumbFallback}><Icon.Tv size={16} /></div>)}
-                    <div style={{ textAlign: "left", flex: 1 }}>
-                      <div style={styles.resultName}>{r.show.name}</div>
-                      <div style={styles.resultMeta}>{r.show.premiered ? r.show.premiered.slice(0, 4) : "—"} · {r.show.network?.name || r.show.webChannel?.name || "Unknown network"}</div>
-                    </div>
-                    {already ? (<span style={styles.alreadyTag}>Added</span>) : (<span style={{ color: "#4FD1C5", display: "flex" }}><Icon.Plus /></span>)}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-const styles = {
-  page: { minHeight: "100vh", background: "#14161C", color: "#EDEAE2", fontFamily: "'Space Grotesk', system-ui, sans-serif", position: "relative", paddingBottom: 40 },
-  scanlines: { position: "fixed", inset: 0, pointerEvents: "none", backgroundImage: "repeating-linear-gradient(0deg, rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 3px)", zIndex: 0 },
-  header: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "20px 24px 16px", flexWrap: "wrap", gap: 12, position: "relative", zIndex: 1 },
-  headerLeft: { display: "flex", alignItems: "center", gap: 10 },
-  logoMark: { width: 32, height: 32, borderRadius: 8, background: "#4FD1C5", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
-  logoTitle: { fontFamily: "'JetBrains Mono', monospace", fontSize: 15, fontWeight: 700, letterSpacing: "0.12em", lineHeight: 1 },
-  logoSub: { fontSize: 11, color: "#8B8FA3", marginTop: 3 },
-  headerRight: { display: "flex", alignItems: "center", gap: 10 },
-  onAirBadge: { display: "flex", alignItems: "center", gap: 6, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, letterSpacing: "0.06em", color: "#FF4B3E", border: "1px solid rgba(255,75,62,0.4)", borderRadius: 20, padding: "5px 10px", background: "rgba(255,75,62,0.08)" },
-  onAirDot: { width: 6, height: 6, borderRadius: "50%", background: "#FF4B3E", display: "inline-block", animation: "pulse 1s ease-in-out infinite alternate" },
-  iconButton: { width: 34, height: 34, borderRadius: 8, border: "1px solid #2A2E3A", background: "#1B1E27", color: "#8B8FA3", display: "flex", alignItems: "center", justifyContent: "center" },
-  iconButtonPlain: { background: "none", border: "none", color: "#8B8FA3", display: "flex" },
-  addButton: { display: "flex", alignItems: "center", gap: 6, background: "#EDEAE2", color: "#14161C", border: "none", borderRadius: 8, padding: "9px 14px", fontSize: 13, fontWeight: 600 },
-  errorBanner: { margin: "0 24px 12px", background: "rgba(255,75,62,0.1)", border: "1px solid rgba(255,75,62,0.35)", color: "#FF9A90", borderRadius: 8, padding: "10px 14px", fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, position: "relative", zIndex: 1 },
-  errorDismiss: { background: "none", border: "none", color: "#FF9A90", display: "flex" },
-  dial: { display: "flex", gap: 8, padding: "0 24px 20px", overflowX: "auto", position: "relative", zIndex: 1 },
-  dialButton: { position: "relative", display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2, minWidth: 128, background: "#1B1E27", border: "1px solid #262A35", borderRadius: 10, padding: "10px 12px", color: "#8B8FA3", flexShrink: 0 },
-  dialButtonActive: { background: "#20232E", color: "#EDEAE2" },
-  dialNum: { fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 700 },
-  dialLabel: { fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap" },
-  dialCount: { fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: "#5A5F73" },
-  dialLight: { position: "absolute", top: 8, right: 8, width: 6, height: 6, borderRadius: "50%" },
-  main: { padding: "0 24px", position: "relative", zIndex: 1 },
-  emptyState: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "60px 20px", color: "#8B8FA3", textAlign: "center", gap: 4 },
-  emptyTitle: { fontSize: 15, fontWeight: 600, color: "#EDEAE2", marginTop: 8 },
-  emptySub: { fontSize: 13, color: "#8B8FA3" },
-  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 },
-  card: { background: "#1B1E27", border: "1px solid #262A35", borderRadius: 12, padding: 14, position: "relative", display: "flex", flexDirection: "column", gap: 10 },
-  newBadge: { position: "absolute", top: -9, left: 12, background: "#FF4B3E", color: "#14161C", fontFamily: "'JetBrains Mono', monospace", fontSize: 9.5, fontWeight: 700, letterSpacing: "0.05em", padding: "3px 8px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" },
-  cardTop: { display: "flex", gap: 12 },
-  poster: { width: 56, height: 78, borderRadius: 6, objectFit: "cover", flexShrink: 0 },
-  posterFallback: { width: 56, height: 78, borderRadius: 6, background: "#262A35", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
-  cardInfo: { display: "flex", flexDirection: "column", gap: 3, minWidth: 0 },
-  showName: { fontSize: 14, fontWeight: 700, lineHeight: 1.25 },
-  showNetwork: { fontSize: 11.5, color: "#8B8FA3" },
-  airdate: { fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#4FD1C5", marginTop: 4 },
-  airdateMuted: { fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#5A5F73", marginTop: 4 },
-  cardFooter: { display: "flex", justifyContent: "flex-end" },
-  moveButton: { display: "flex", alignItems: "center", gap: 4, background: "none", border: "1px solid #2A2E3A", color: "#8B8FA3", borderRadius: 7, padding: "6px 10px", fontSize: 12 },
-  menu: { position: "absolute", bottom: "calc(100% + 6px)", right: 0, background: "#20232E", border: "1px solid #2A2E3A", borderRadius: 10, padding: 6, width: 190, zIndex: 5, boxShadow: "0 8px 24px rgba(0,0,0,0.4)" },
-  menuItem: { display: "flex", alignItems: "center", gap: 8, width: "100%", background: "none", border: "none", color: "#EDEAE2", fontSize: 13, padding: "8px 8px", borderRadius: 6, textAlign: "left" },
-  modalBackdrop: { position: "fixed", inset: 0, background: "rgba(10,11,15,0.7)", display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "10vh", zIndex: 10 },
-  modal: { width: "min(520px, 92vw)", background: "#1B1E27", border: "1px solid #2A2E3A", borderRadius: 14, overflow: "hidden", maxHeight: "70vh", display: "flex", flexDirection: "column" },
-  modalHeader: { display: "flex", alignItems: "center", gap: 10, padding: "14px 16px", borderBottom: "1px solid #262A35" },
-  searchInput: { flex: 1, background: "none", border: "none", outline: "none", color: "#EDEAE2", fontSize: 14 },
-  resultsList: { overflowY: "auto", padding: 8 },
-  resultRow: { display: "flex", alignItems: "center", gap: 10, width: "100%", background: "none", border: "none", padding: 8, borderRadius: 8, color: "#EDEAE2" },
-  resultThumb: { width: 34, height: 46, borderRadius: 4, objectFit: "cover", flexShrink: 0 },
-  resultThumbFallback: { width: 34, height: 46, borderRadius: 4, background: "#262A35", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
-  resultName: { fontSize: 13.5, fontWeight: 600 },
-  resultMeta: { fontSize: 11.5, color: "#8B8FA3", marginTop: 2 },
-  alreadyTag: { fontSize: 10.5, color: "#5A5F73", fontFamily: "'JetBrains Mono', monospace" },
-};
-
-const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(<ShowTracker />);
+  var root = ReactDOM.createRoot(document.getElementById("root"));
+  root.render(h(App));
+})();
 </script>
 </body>
 </html>
