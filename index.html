@@ -104,6 +104,20 @@ window.addEventListener("error", function (e) {
     } catch (e) { return null; }
   }
 
+  // Only keep the fields the app actually reads. TVmaze's raw episode objects
+  // include a full HTML summary, images, runtime, ratings, and API links that
+  // are never used here, and they're what was blowing past the localStorage quota.
+  function trimEpisode(e) {
+    return { id: e.id, season: e.season, number: e.number, name: e.name, airdate: e.airdate };
+  }
+  function trimEpisodesCache(cache) {
+    var next = {};
+    Object.keys(cache || {}).forEach(function (tvmazeId) {
+      next[tvmazeId] = (cache[tvmazeId] || []).map(trimEpisode);
+    });
+    return next;
+  }
+
   function App() {
     var showsState = useState([]);
     var shows = showsState[0], setShows = showsState[1];
@@ -142,7 +156,7 @@ window.addEventListener("error", function (e) {
         if (rawShows) setShows(JSON.parse(rawShows));
         
         var rawCache = localStorage.getItem(STORAGE_KEY + "-cache");
-        if (rawCache) setEpisodesCache(JSON.parse(rawCache));
+        if (rawCache) setEpisodesCache(trimEpisodesCache(JSON.parse(rawCache)));
       } catch (e) {}
       setLoaded(true);
     }, []);
@@ -153,7 +167,11 @@ window.addEventListener("error", function (e) {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(shows)); 
         localStorage.setItem(STORAGE_KEY + "-cache", JSON.stringify(episodesCache));
       }
-      catch (e) { setError("Couldn't save your changes locally."); }
+      catch (e) {
+        console.error("Queue: failed to save to localStorage", e);
+        var reason = (e && (e.name || e.message)) ? (e.name || e.message) : "unknown error";
+        setError("Couldn't save your changes locally (" + reason + ").");
+      }
     }, [shows, episodesCache, loaded]);
 
     useEffect(function () {
@@ -251,7 +269,7 @@ window.addEventListener("error", function (e) {
         try {
           var parsed = JSON.parse(evt.target.result);
           var incomingShows = Array.isArray(parsed) ? parsed : parsed.shows;
-          var incomingCache = parsed.episodesCache || {};
+          var incomingCache = trimEpisodesCache(parsed.episodesCache || {});
           
           if (!Array.isArray(incomingShows)) throw new Error("bad format");
           var proceed = shows.length === 0 || window.confirm(
@@ -286,7 +304,7 @@ window.addEventListener("error", function (e) {
         .then(function (eps) {
           setEpisodesCache(function (prev) {
             var next = Object.assign({}, prev);
-            next[show.tvmazeId] = eps;
+            next[show.tvmazeId] = eps.map(trimEpisode);
             return next;
           });
         })
