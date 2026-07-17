@@ -494,8 +494,8 @@ window.addEventListener("error", function (e) {
       airingCount > 0 ? h("div", { className: "qh-airing-badge", style: styles.onAirBadge },
         h("span", { style: styles.onAirDot }),
         airingCount + " ",
-        h("span", { className: "qh-airing-now-word" }, "NOW "),
-        "AIRING"
+        h("span", { className: "qh-airing-now-word" }, "Now "),
+        "Airing"
       ) : null,
       h("div", { className: "qh-actions" },
         h("input", { ref: fileInputRef, type: "file", accept: "application/json", style: { display: "none" }, onChange: handleImportFile }),
