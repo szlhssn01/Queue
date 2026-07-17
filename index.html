@@ -136,6 +136,24 @@ window.addEventListener("error", function (e) {
     return { lastAired: lastAired, nextUp: nextUp };
   }
 
+  // Whether a show has a "new episode" worth flagging. When we have the full
+  // episode list cached, this is derived fresh every time from real data
+  // (unwatched + aired within the last 10 days + not already dismissed) so it
+  // can never drift into a stuck or false state. Without a cached list yet,
+  // fall back to the lighter embed-based flag as a rough approximation.
+  function isNewEpisode(show, eps) {
+    if (eps && eps.length) {
+      var cursor = computeEpisodeCursor(eps);
+      if (!cursor.lastAired) return false;
+      var watchedIds = show.watchedEpisodeIds || [];
+      if (watchedIds.indexOf(cursor.lastAired.id) !== -1) return false;
+      if (show.lastSeenEpisodeId === cursor.lastAired.id) return false;
+      var diffDays = (Date.now() - new Date(cursor.lastAired.airdate).getTime()) / 86400000;
+      return diffDays >= 0 && diffDays <= 10;
+    }
+    return !!show.hasNew;
+  }
+
   function App() {
     var showsState = useState([]);
     var shows = showsState[0], setShows = showsState[1];
@@ -200,38 +218,30 @@ window.addEventListener("error", function (e) {
       // eslint-disable-next-line
     }, [loaded]);
 
-    // Whenever we have a full episode list cached for a show (from opening its
-    // Episodes panel), use it as the source of truth for "is there a new
-    // episode" and "what's next", instead of relying only on the
-    // previous/next-episode snapshot from refreshOne, which only updates when
-    // a refresh happens to run at the right moment.
+    // One-time repair pass: an earlier version of the new-episode detection
+    // could mistakenly flag many shows as having a new episode and force them
+    // into "Watching". This runs once after load and, for any show still
+    // carrying that stale hasNew flag, recalculates its true status from the
+    // actual watched/aired episode counts and clears the flag. Going forward,
+    // "new episode" is derived live (see isNewEpisode) instead of stored, so
+    // this class of bug can't recur.
     useEffect(function () {
       if (!loaded) return;
       setShows(function (prev) {
         var changed = false;
         var next = prev.map(function (s) {
+          if (!s.hasNew) return s;
+          changed = true;
           var eps = episodesCache[s.tvmazeId];
-          if (!eps || eps.length === 0) return s;
-          var cursor = computeEpisodeCursor(eps);
-          var lastAiredId = cursor.lastAired ? cursor.lastAired.id : null;
-          if (lastAiredId === null) return s;
-          if (s.lastSeenEpisodeId === null) {
-            changed = true;
-            return Object.assign({}, s, { lastSeenEpisodeId: lastAiredId });
-          }
-          if (lastAiredId !== s.lastSeenEpisodeId) {
-            changed = true;
-            var nextStatus = s.status;
-            if (s.status !== "watch_later" && s.status !== "stopped_watching" && s.status !== "havent_watched") {
-              nextStatus = "watching";
-            }
-            return Object.assign({}, s, { lastSeenEpisodeId: lastAiredId, hasNew: true, status: nextStatus });
-          }
-          return s;
+          if (!eps || eps.length === 0) return Object.assign({}, s, { hasNew: false });
+          var corrected = deriveAutoStatus(s, s.watchedEpisodeIds || [], eps);
+          return Object.assign({}, s, { status: corrected, hasNew: false });
         });
         return changed ? next : prev;
       });
-    }, [episodesCache, loaded]);
+      // Runs once, right after the saved shows/cache finish loading.
+      // eslint-disable-next-line
+    }, [loaded]);
 
     useEffect(function () {
       if (!debouncedQuery.trim()) { setSearchResults([]); return; }
@@ -276,7 +286,8 @@ window.addEventListener("error", function (e) {
           setShows(function (prev) {
             return prev.map(function (sh) {
               if (sh.tvmazeId !== show.tvmazeId) return sh;
-              var newEpAired = prevEp && sh.lastSeenEpisodeId && prevEp.id !== sh.lastSeenEpisodeId;
+              var isRecentEp = prevEp && prevEp.airdate && ((Date.now() - new Date(prevEp.airdate).getTime()) / 86400000) <= 10;
+              var newEpAired = prevEp && sh.lastSeenEpisodeId && prevEp.id !== sh.lastSeenEpisodeId && isRecentEp;
               var firstCheck = prevEp && sh.lastSeenEpisodeId === null;
               var isNew = firstCheck ? false : !!newEpAired;
               var nextStatus = sh.status;
@@ -423,21 +434,31 @@ window.addEventListener("error", function (e) {
       setMenuOpenFor(null);
     }
     function dismissNew(showId) {
-      setShows(function (prev) { return prev.map(function (s) { return s.id === showId ? Object.assign({}, s, { hasNew: false }) : s; }); });
+      setShows(function (prev) {
+        return prev.map(function (s) {
+          if (s.id !== showId) return s;
+          var eps = episodesCache[s.tvmazeId];
+          var cursor = (eps && eps.length) ? computeEpisodeCursor(eps) : null;
+          return Object.assign({}, s, {
+            hasNew: false,
+            lastSeenEpisodeId: cursor && cursor.lastAired ? cursor.lastAired.id : s.lastSeenEpisodeId
+          });
+        });
+      });
     }
     function removeShow(showId) {
       setShows(function (prev) { return prev.filter(function (s) { return s.id !== showId; }); });
       setMenuOpenFor(null);
     }
 
-    var newCount = shows.filter(function (s) { return s.hasNew; }).length;
+    var newCount = shows.filter(function (s) { return isNewEpisode(s, episodesCache[s.tvmazeId]); }).length;
     var activeCat = CATEGORIES.filter(function (c) { return c.key === activeTab; })[0];
     var visibleShows = shows.filter(function (s) { return s.status === activeTab; });
     var countsByCategory = {};
     var newByCategory = {};
     CATEGORIES.forEach(function (c) {
       countsByCategory[c.key] = shows.filter(function (s) { return s.status === c.key; }).length;
-      newByCategory[c.key] = shows.some(function (s) { return s.status === c.key && s.hasNew; });
+      newByCategory[c.key] = shows.some(function (s) { return s.status === c.key && isNewEpisode(s, episodesCache[s.tvmazeId]); });
     });
 
     var headerLeft = h("div", { style: styles.headerLeft },
@@ -509,7 +530,7 @@ window.addEventListener("error", function (e) {
           ) : null;
 
           return h("div", { key: show.id, style: styles.card },
-            show.hasNew ? h("div", { style: styles.newBadge, onClick: function () { dismissNew(show.id); }, title: "Mark as seen" }, h("span", { style: styles.onAirDot }), "NEW EPISODE") : null,
+            isNewEpisode(show, episodesCache[show.tvmazeId]) ? h("div", { style: styles.newBadge, onClick: function () { dismissNew(show.id); }, title: "Mark as seen" }, h("span", { style: styles.onAirDot }), "NEW EPISODE") : null,
             h("div", { style: styles.cardTop },
               show.image ? h("img", { src: show.image, alt: show.name, style: styles.poster }) : h("div", { style: styles.posterFallback }, Icons.tv(20)),
               h("div", { style: styles.cardInfo },
