@@ -104,9 +104,6 @@ window.addEventListener("error", function (e) {
     } catch (e) { return null; }
   }
 
-  // Only keep the fields the app actually reads. TVmaze's raw episode objects
-  // include a full HTML summary, images, runtime, ratings, and API links that
-  // are never used here, and they're what was blowing past the localStorage quota.
   function trimEpisode(e) {
     return { id: e.id, season: e.season, number: e.number, name: e.name, airdate: e.airdate };
   }
@@ -118,10 +115,6 @@ window.addEventListener("error", function (e) {
     return next;
   }
 
-  // Given a show's full episode list, work out the latest episode that has
-  // actually aired and the next one still to come, relative to today. This is
-  // recalculated every time it's used, so it never goes stale the way a
-  // one-time API snapshot would as days pass.
   function computeEpisodeCursor(eps) {
     var today = new Date().toISOString().slice(0, 10);
     var lastAired = null, nextUp = null;
@@ -136,11 +129,6 @@ window.addEventListener("error", function (e) {
     return { lastAired: lastAired, nextUp: nextUp };
   }
 
-  // Whether a show has a "new episode" worth flagging. When we have the full
-  // episode list cached, this is derived fresh every time from real data
-  // (unwatched + aired within the last 10 days + not already dismissed) so it
-  // can never drift into a stuck or false state. Without a cached list yet,
-  // fall back to the lighter embed-based flag as a rough approximation.
   function isNewEpisode(show, eps) {
     if (eps && eps.length) {
       var cursor = computeEpisodeCursor(eps);
@@ -214,17 +202,8 @@ window.addEventListener("error", function (e) {
       if (!loaded) return;
       if (shows.length === 0) return;
       refreshAll();
-      // Only run this once, right after shows finish loading from storage.
-      // eslint-disable-next-line
     }, [loaded]);
 
-    // One-time repair pass: an earlier version of the new-episode detection
-    // could mistakenly flag many shows as having a new episode and force them
-    // into "Watching". This runs once after load and, for any show still
-    // carrying that stale hasNew flag, recalculates its true status from the
-    // actual watched/aired episode counts and clears the flag. Going forward,
-    // "new episode" is derived live (see isNewEpisode) instead of stored, so
-    // this class of bug can't recur.
     useEffect(function () {
       if (!loaded) return;
       setShows(function (prev) {
@@ -239,8 +218,6 @@ window.addEventListener("error", function (e) {
         });
         return changed ? next : prev;
       });
-      // Runs once, right after the saved shows/cache finish loading.
-      // eslint-disable-next-line
     }, [loaded]);
 
     useEffect(function () {
@@ -278,34 +255,56 @@ window.addEventListener("error", function (e) {
     }
 
     function refreshOne(show) {
-      return fetch(TVMAZE + "/shows/" + show.tvmazeId + "?embed[]=previousepisode&embed[]=nextepisode")
-        .then(function (res) { return res.json(); })
-        .then(function (data) {
-          var prevEp = data._embedded && data._embedded.previousepisode;
-          var nextEp = data._embedded && data._embedded.nextepisode;
-          setShows(function (prev) {
-            return prev.map(function (sh) {
-              if (sh.tvmazeId !== show.tvmazeId) return sh;
-              var isRecentEp = prevEp && prevEp.airdate && ((Date.now() - new Date(prevEp.airdate).getTime()) / 86400000) <= 10;
-              var newEpAired = prevEp && sh.lastSeenEpisodeId && prevEp.id !== sh.lastSeenEpisodeId && isRecentEp;
-              var firstCheck = prevEp && sh.lastSeenEpisodeId === null;
-              var isNew = firstCheck ? false : !!newEpAired;
-              var nextStatus = sh.status;
-              if (isNew && sh.status !== "watch_later" && sh.status !== "stopped_watching" && sh.status !== "havent_watched") {
-                nextStatus = "watching";
-              }
-              return Object.assign({}, sh, {
-                lastAirdate: (prevEp && prevEp.airdate) || null,
-                nextAirdate: (nextEp && nextEp.airdate) || null,
-                showStatus: data.status || sh.showStatus,
-                hasNew: isNew,
-                status: nextStatus,
-                lastSeenEpisodeId: prevEp ? prevEp.id : sh.lastSeenEpisodeId
-              });
+      return Promise.all([
+        fetch(TVMAZE + "/shows/" + show.tvmazeId + "?embed[]=previousepisode&embed[]=nextepisode").then(function (res) { return res.json(); }),
+        fetch(TVMAZE + "/shows/" + show.tvmazeId + "/episodes").then(function (res) { return res.json(); })
+      ])
+      .then(function (results) {
+        var data = results[0];
+        var rawEps = results[1] || [];
+        var trimmedEps = rawEps.map(trimEpisode);
+
+        var prevEp = data._embedded && data._embedded.previousepisode;
+        var nextEp = data._embedded && data._embedded.nextepisode;
+
+        setEpisodesCache(function (prev) {
+          var nextCache = Object.assign({}, prev);
+          nextCache[show.tvmazeId] = trimmedEps;
+          return nextCache;
+        });
+
+        setShows(function (prev) {
+          return prev.map(function (sh) {
+            if (sh.tvmazeId !== show.tvmazeId) return sh;
+            var isRecentEp = prevEp && prevEp.airdate && ((Date.now() - new Date(prevEp.airdate).getTime()) / 86400000) <= 10;
+            var newEpAired = prevEp && sh.lastSeenEpisodeId && prevEp.id !== sh.lastSeenEpisodeId && isRecentEp;
+            var firstCheck = prevEp && sh.lastSeenEpisodeId === null;
+            var isNew = firstCheck ? false : !!newEpAired;
+            
+            var nextStatus = sh.status;
+            if (isNew && sh.status !== "watch_later" && sh.status !== "stopped_watching" && sh.status !== "havent_watched") {
+              nextStatus = "watching";
+            }
+            
+            var initialSeenId = sh.lastSeenEpisodeId;
+            if (initialSeenId === null && prevEp) {
+              initialSeenId = prevEp.id;
+            }
+
+            return Object.assign({}, sh, {
+              lastAirdate: (prevEp && prevEp.airdate) || null,
+              nextAirdate: (nextEp && nextEp.airdate) || null,
+              showStatus: data.status || sh.showStatus,
+              hasNew: isNew,
+              status: nextStatus,
+              lastSeenEpisodeId: initialSeenId
             });
           });
-        })
-        .catch(function () {});
+        });
+      })
+      .catch(function (err) {
+        console.error("Error updating details for show ID " + show.tvmazeId, err);
+      });
     }
 
     function exportData() {
