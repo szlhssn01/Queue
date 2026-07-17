@@ -190,6 +190,43 @@ window.addEventListener("error", function (e) {
     return [item].concat(rest);
   }
 
+  function delay(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  // Retries a failing async function a limited number of times with a short
+  // pause in between, to absorb transient network blips / rate-limit hiccups.
+  function withRetry(fn, retries, delayMs) {
+    return fn().catch(function (err) {
+      if (retries <= 0) throw err;
+      return delay(delayMs).then(function () { return withRetry(fn, retries - 1, delayMs); });
+    });
+  }
+
+  // Runs `worker` over `items` with at most `limit` running concurrently,
+  // so we don't fire a big burst of requests that trips API rate limits.
+  function runWithConcurrency(items, limit, worker) {
+    return new Promise(function (resolve) {
+      if (items.length === 0) { resolve([]); return; }
+      var idx = 0, active = 0, done = 0;
+      var results = new Array(items.length);
+      function next() {
+        if (done >= items.length) { resolve(results); return; }
+        while (active < limit && idx < items.length) {
+          (function (i) {
+            active++;
+            worker(items[i])
+              .then(function (r) { results[i] = r; })
+              .catch(function () {})
+              .finally(function () { active--; done++; next(); });
+          })(idx);
+          idx++;
+        }
+      }
+      next();
+    });
+  }
+
   function App() {
     var showsState = useState([]);
     var shows = showsState[0], setShows = showsState[1];
@@ -285,10 +322,13 @@ window.addEventListener("error", function (e) {
     }
 
     function refreshOne(show) {
-      return Promise.all([
-        fetch(TVMAZE + "/shows/" + show.tvmazeId + "?embed[]=previousepisode&embed[]=nextepisode").then(function (res) { return res.json(); }),
-        fetch(TVMAZE + "/shows/" + show.tvmazeId + "/episodes").then(function (res) { return res.json(); })
-      ])
+      var doFetch = function () {
+        return Promise.all([
+          fetch(TVMAZE + "/shows/" + show.tvmazeId + "?embed[]=previousepisode&embed[]=nextepisode").then(function (res) { return res.json(); }),
+          fetch(TVMAZE + "/shows/" + show.tvmazeId + "/episodes").then(function (res) { return res.json(); })
+        ]);
+      };
+      return withRetry(doFetch, 1, 900)
       .then(function (results) {
         var data = results[0];
         var rawEps = results[1] || [];
@@ -327,7 +367,7 @@ window.addEventListener("error", function (e) {
       })
       .catch(function (err) {
         console.error("Error updating details for show ID " + show.tvmazeId, err);
-        setError("Couldn't refresh \"" + show.name + "\". Try again.");
+        setError("Couldn't refresh \"" + show.name + "\". Check your connection and try again.");
       });
     }
 
@@ -383,7 +423,7 @@ window.addEventListener("error", function (e) {
 
     function refreshAll() {
       setRefreshing(true); setError(null);
-      Promise.all(shows.map(function (s) { return refreshOne(s); }))
+      runWithConcurrency(shows, 5, function (s) { return refreshOne(s); })
         .finally(function () { setRefreshing(false); });
     }
 
