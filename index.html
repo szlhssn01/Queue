@@ -704,8 +704,8 @@ window.addEventListener("error", function (e) {
             );
           }) : null;
           return h("div", { key: sn },
-            h("div", { style: styles.seasonHeader },
-              h("div", { style: styles.seasonTitle, onClick: function () { toggleSeasonExpanded(sn); } },
+            h("div", { style: styles.seasonHeader, onClick: function () { toggleSeasonExpanded(sn); } },
+              h("div", { style: styles.seasonTitle },
                 h("span", { style: { display: "flex", transform: isExpanded ? "none" : "rotate(-90deg)", transition: "transform 0.15s" } }, Icons.chevron()),
                 "Season " + sn
               ),
@@ -713,7 +713,7 @@ window.addEventListener("error", function (e) {
                 h("span", { style: styles.seasonProgress }, watchedCount + "/" + aired.length),
                 h("button", {
                   style: styles.seasonMarkAll,
-                  onClick: function () { markEpisodesWatched(detailShow.id, aired.map(function (e) { return e.id; }), watchedCount < aired.length); }
+                  onClick: function (e) { e.stopPropagation(); markEpisodesWatched(detailShow.id, aired.map(function (e) { return e.id; }), watchedCount < aired.length); }
                 }, watchedCount < aired.length ? "Mark all" : "Unmark all")
               )
             ),
