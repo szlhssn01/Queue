@@ -28,6 +28,9 @@
     .qh-actions { margin-left: 0; gap: 6px; }
     .qh-airing-badge { padding: 5px 8px; font-size: 10px; }
   }
+
+  .qh-dial { scrollbar-width: none; -ms-overflow-style: none; }
+  .qh-dial::-webkit-scrollbar { display: none; }
 </style>
 </head>
 <body>
@@ -551,7 +554,7 @@ window.addEventListener("error", function (e) {
       h("button", { onClick: function () { setError(null); }, style: styles.errorDismiss }, Icons.x(14))
     ) : null;
 
-    var dial = h("nav", { style: styles.dial },
+    var dial = h("nav", { className: "qh-dial", style: styles.dial },
       CATEGORIES.map(function (c) {
         var activeStyle = activeTab === c.key ? Object.assign({}, styles.dialButtonActive, { boxShadow: "0 0 0 1.5px " + c.color + " inset" }) : {};
         return h("button", {
