@@ -104,6 +104,9 @@ window.addEventListener("error", function (e) {
     } catch (e) { return null; }
   }
 
+  // Only keep the fields the app actually reads. TVmaze's raw episode objects
+  // include a full HTML summary, images, runtime, ratings, and API links that
+  // are never used here, and they're what was blowing past the localStorage quota.
   function trimEpisode(e) {
     return { id: e.id, season: e.season, number: e.number, name: e.name, airdate: e.airdate };
   }
@@ -115,6 +118,10 @@ window.addEventListener("error", function (e) {
     return next;
   }
 
+  // Given a show's full episode list, work out the latest episode that has
+  // actually aired and the next one still to come, relative to today. This is
+  // recalculated every time it's used, so it never goes stale the way a
+  // one-time API snapshot would as days pass.
   function computeEpisodeCursor(eps) {
     var today = new Date().toISOString().slice(0, 10);
     var lastAired = null, nextUp = null;
@@ -129,37 +136,20 @@ window.addEventListener("error", function (e) {
     return { lastAired: lastAired, nextUp: nextUp };
   }
 
-  function isNewEpisode(show, eps) {
-    // If local manual override says true, honor it first
-    if (show.hasNew) return true;
-    if (!eps || !eps.length) return false;
-
-    var cursor = computeEpisodeCursor(eps);
-    var todayStr = new Date().toISOString().slice(0, 10);
-    var nowTime = Date.now();
-
-    // Condition 1: A new episode has recently aired in the past 10 days that we haven't acknowledged/watched
-    if (cursor.lastAired) {
-      var watchedIds = show.watchedEpisodeIds || [];
-      var notWatched = watchedIds.indexOf(cursor.lastAired.id) === -1;
-      var notDismissed = show.lastSeenEpisodeId !== cursor.lastAired.id;
-      var diffDays = (nowTime - new Date(cursor.lastAired.airdate).getTime()) / 86400000;
-      if (notWatched && notDismissed && diffDays >= 0 && diffDays <= 10) {
-        return true;
-      }
+  // Whether a show counts as "now airing": it aired an episode within the
+  // last 7 days. Purely a date calculation done fresh every time, no stored
+  // flag involved, so there's nothing that can drift or get stuck.
+  function isNowAiring(show, eps) {
+    var lastAiredDate = null;
+    if (eps && eps.length) {
+      var cursor = computeEpisodeCursor(eps);
+      lastAiredDate = cursor.lastAired ? cursor.lastAired.airdate : null;
+    } else {
+      lastAiredDate = show.lastAirdate || null;
     }
-
-    // Condition 2: There is an active countdown for an episode airing within the next 3 days (or today)
-    if (cursor.nextUp && cursor.nextUp.airdate) {
-      var nextAirTime = new Date(cursor.nextUp.airdate).getTime();
-      var daysUntil = (nextAirTime - nowTime) / 86400000;
-      // Triggers badge if the next episode is arriving inside a 3 day window
-      if (daysUntil <= 3) {
-        return true;
-      }
-    }
-
-    return false;
+    if (!lastAiredDate) return false;
+    var diffDays = (Date.now() - new Date(lastAiredDate).getTime()) / 86400000;
+    return diffDays >= 0 && diffDays <= 7;
   }
 
   function App() {
@@ -186,6 +176,8 @@ window.addEventListener("error", function (e) {
     var menuOpenFor = menuOpenForState[0], setMenuOpenFor = menuOpenForState[1];
     var detailShowIdState = useState(null);
     var detailShowId = detailShowIdState[0], setDetailShowId = detailShowIdState[1];
+    var nowAiringOpenState = useState(false);
+    var nowAiringOpen = nowAiringOpenState[0], setNowAiringOpen = nowAiringOpenState[1];
     var episodesCacheState = useState({});
     var episodesCache = episodesCacheState[0], setEpisodesCache = episodesCacheState[1];
     var episodesLoadingState = useState(false);
@@ -222,8 +214,16 @@ window.addEventListener("error", function (e) {
       if (!loaded) return;
       if (shows.length === 0) return;
       refreshAll();
+      // Only run this once, right after shows finish loading from storage.
+      // eslint-disable-next-line
     }, [loaded]);
 
+    // One-time repair pass: an earlier version of the new-episode detection
+    // could mistakenly flag many shows as having a new episode and force them
+    // into "Watching". This runs once after load and, for any show still
+    // carrying that stale hasNew flag, recalculates its true status from the
+    // actual watched/aired episode counts and clears the flag. The hasNew
+    // field itself is no longer used for anything after this cleanup runs.
     useEffect(function () {
       if (!loaded) return;
       setShows(function (prev) {
@@ -238,6 +238,8 @@ window.addEventListener("error", function (e) {
         });
         return changed ? next : prev;
       });
+      // Runs once, right after the saved shows/cache finish loading.
+      // eslint-disable-next-line
     }, [loaded]);
 
     useEffect(function () {
@@ -263,10 +265,8 @@ window.addEventListener("error", function (e) {
         network: (s.network && s.network.name) || (s.webChannel && s.webChannel.name) || "Unknown",
         status: "havent_watched",
         showStatus: s.status || null,
-        lastSeenEpisodeId: null,
         nextAirdate: null,
         lastAirdate: null,
-        hasNew: false,
         watchedEpisodeIds: []
       };
       setShows(function (prev) { return [newShow].concat(prev); });
@@ -275,56 +275,23 @@ window.addEventListener("error", function (e) {
     }
 
     function refreshOne(show) {
-      return Promise.all([
-        fetch(TVMAZE + "/shows/" + show.tvmazeId + "?embed[]=previousepisode&embed[]=nextepisode").then(function (res) { return res.json(); }),
-        fetch(TVMAZE + "/shows/" + show.tvmazeId + "/episodes").then(function (res) { return res.json(); })
-      ])
-      .then(function (results) {
-        var data = results[0];
-        var rawEps = results[1] || [];
-        var trimmedEps = rawEps.map(trimEpisode);
-
-        var prevEp = data._embedded && data._embedded.previousepisode;
-        var nextEp = data._embedded && data._embedded.nextepisode;
-
-        setEpisodesCache(function (prev) {
-          var nextCache = Object.assign({}, prev);
-          nextCache[show.tvmazeId] = trimmedEps;
-          return nextCache;
-        });
-
-        setShows(function (prev) {
-          return prev.map(function (sh) {
-            if (sh.tvmazeId !== show.tvmazeId) return sh;
-            var isRecentEp = prevEp && prevEp.airdate && ((Date.now() - new Date(prevEp.airdate).getTime()) / 86400000) <= 10;
-            var newEpAired = prevEp && sh.lastSeenEpisodeId && prevEp.id !== sh.lastSeenEpisodeId && isRecentEp;
-            var firstCheck = prevEp && sh.lastSeenEpisodeId === null;
-            var isNew = firstCheck ? false : !!newEpAired;
-            
-            var nextStatus = sh.status;
-            if (isNew && sh.status !== "watch_later" && sh.status !== "stopped_watching" && sh.status !== "havent_watched") {
-              nextStatus = "watching";
-            }
-            
-            var initialSeenId = sh.lastSeenEpisodeId;
-            if (initialSeenId === null && prevEp) {
-              initialSeenId = prevEp.id;
-            }
-
-            return Object.assign({}, sh, {
-              lastAirdate: (prevEp && prevEp.airdate) || null,
-              nextAirdate: (nextEp && nextEp.airdate) || null,
-              showStatus: data.status || sh.showStatus,
-              hasNew: isNew,
-              status: nextStatus,
-              lastSeenEpisodeId: initialSeenId
+      return fetch(TVMAZE + "/shows/" + show.tvmazeId + "?embed[]=previousepisode&embed[]=nextepisode")
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          var prevEp = data._embedded && data._embedded.previousepisode;
+          var nextEp = data._embedded && data._embedded.nextepisode;
+          setShows(function (prev) {
+            return prev.map(function (sh) {
+              if (sh.tvmazeId !== show.tvmazeId) return sh;
+              return Object.assign({}, sh, {
+                lastAirdate: (prevEp && prevEp.airdate) || null,
+                nextAirdate: (nextEp && nextEp.airdate) || null,
+                showStatus: data.status || sh.showStatus
+              });
             });
           });
-        });
-      })
-      .catch(function (err) {
-        console.error("Error updating details for show ID " + show.tvmazeId, err);
-      });
+        })
+        .catch(function () {});
     }
 
     function exportData() {
@@ -412,8 +379,7 @@ window.addEventListener("error", function (e) {
           var nextWatched = isWatched ? watched.filter(function (id) { return id !== episodeId; }) : watched.concat([episodeId]);
           var eps = episodesCache[s.tvmazeId];
           var nextStatus = deriveAutoStatus(s, nextWatched, eps);
-          var clearsNew = nextStatus === "up_to_date" || nextStatus === "finished";
-          return Object.assign({}, s, { watchedEpisodeIds: nextWatched, status: nextStatus, hasNew: clearsNew ? false : s.hasNew });
+          return Object.assign({}, s, { watchedEpisodeIds: nextWatched, status: nextStatus });
         });
       });
     }
@@ -432,8 +398,7 @@ window.addEventListener("error", function (e) {
           }
           var eps = episodesCache[s.tvmazeId];
           var nextStatus = deriveAutoStatus(s, nextWatched, eps);
-          var clearsNew = nextStatus === "up_to_date" || nextStatus === "finished";
-          return Object.assign({}, s, { watchedEpisodeIds: nextWatched, status: nextStatus, hasNew: clearsNew ? false : s.hasNew });
+          return Object.assign({}, s, { watchedEpisodeIds: nextWatched, status: nextStatus });
         });
       });
     }
@@ -452,32 +417,17 @@ window.addEventListener("error", function (e) {
       });
       setMenuOpenFor(null);
     }
-    function dismissNew(showId) {
-      setShows(function (prev) {
-        return prev.map(function (s) {
-          if (s.id !== showId) return s;
-          var eps = episodesCache[s.tvmazeId];
-          var cursor = (eps && eps.length) ? computeEpisodeCursor(eps) : null;
-          return Object.assign({}, s, {
-            hasNew: false,
-            lastSeenEpisodeId: cursor && cursor.lastAired ? cursor.lastAired.id : s.lastSeenEpisodeId
-          });
-        });
-      });
-    }
     function removeShow(showId) {
       setShows(function (prev) { return prev.filter(function (s) { return s.id !== showId; }); });
       setMenuOpenFor(null);
     }
 
-    var newCount = shows.filter(function (s) { return isNewEpisode(s, episodesCache[s.tvmazeId]); }).length;
+    var nowAiringShows = shows.filter(function (s) { return isNowAiring(s, episodesCache[s.tvmazeId]); });
     var activeCat = CATEGORIES.filter(function (c) { return c.key === activeTab; })[0];
     var visibleShows = shows.filter(function (s) { return s.status === activeTab; });
     var countsByCategory = {};
-    var newByCategory = {};
     CATEGORIES.forEach(function (c) {
       countsByCategory[c.key] = shows.filter(function (s) { return s.status === c.key; }).length;
-      newByCategory[c.key] = shows.some(function (s) { return s.status === c.key && isNewEpisode(s, episodesCache[s.tvmazeId]); });
     });
 
     var headerLeft = h("div", { style: styles.headerLeft },
@@ -494,7 +444,7 @@ window.addEventListener("error", function (e) {
     );
 
     var headerRight = h("div", { style: styles.headerRight },
-      newCount > 0 ? h("div", { style: styles.onAirBadge }, h("span", { style: styles.onAirDot }), newCount + " NOW AIRING") : null,
+      nowAiringShows.length > 0 ? h("button", { onClick: function () { setNowAiringOpen(true); }, style: styles.onAirBadge }, h("span", { style: styles.onAirDot }), nowAiringShows.length + " NOW AIRING") : null,
       h("input", { ref: fileInputRef, type: "file", accept: "application/json", style: { display: "none" }, onChange: handleImportFile }),
       h("button", { onClick: triggerImport, style: styles.iconButton, title: "Import backup" }, Icons.upload()),
       h("button", { onClick: exportData, disabled: shows.length === 0, style: styles.iconButton, title: "Export backup" }, Icons.download()),
@@ -519,8 +469,7 @@ window.addEventListener("error", function (e) {
             h("span", { style: Object.assign({}, styles.dialDot, { background: c.color }) }),
             h("span", { style: styles.dialLabel }, c.label)
           ),
-          h("span", { style: styles.dialCount }, countsByCategory[c.key]),
-          newByCategory[c.key] ? h("span", { style: Object.assign({}, styles.dialLight, { background: "#FF4B3E" }) }) : null
+          h("span", { style: styles.dialCount }, countsByCategory[c.key])
         );
       })
     );
@@ -549,7 +498,6 @@ window.addEventListener("error", function (e) {
           ) : null;
 
           return h("div", { key: show.id, style: styles.card },
-            isNewEpisode(show, episodesCache[show.tvmazeId]) ? h("div", { style: styles.newBadge, onClick: function () { dismissNew(show.id); }, title: "Mark as seen" }, h("span", { style: styles.onAirDot }), "NEW EPISODE") : null,
             h("div", { style: styles.cardTop },
               show.image ? h("img", { src: show.image, alt: show.name, style: styles.poster }) : h("div", { style: styles.posterFallback }, Icons.tv(20)),
               h("div", { style: styles.cardInfo },
@@ -703,12 +651,41 @@ window.addEventListener("error", function (e) {
       );
     }
 
+    var nowAiringScreen = h("div", { style: styles.main },
+      h("div", { style: styles.nowAiringHeader },
+        h("button", { onClick: function () { setNowAiringOpen(false); }, style: styles.backButton }, "← Back"),
+        h("div", { style: styles.nowAiringTitle }, "Now Airing")
+      ),
+      nowAiringShows.length === 0
+        ? h("div", { style: styles.emptyState },
+            Icons.tv(28),
+            h("div", { style: styles.emptyTitle }, "Nothing airing right now"),
+            h("div", { style: styles.emptySub }, "Shows appear here for a week after a new episode airs.")
+          )
+        : h("div", { style: styles.grid },
+            nowAiringShows.map(function (show) {
+              return h("div", {
+                key: show.id,
+                style: Object.assign({}, styles.card, { cursor: "pointer" }),
+                onClick: function () { setNowAiringOpen(false); setActiveTab(show.status); }
+              },
+                h("div", { style: styles.cardTop },
+                  show.image ? h("img", { src: show.image, alt: show.name, style: styles.poster }) : h("div", { style: styles.posterFallback }, Icons.tv(20)),
+                  h("div", { style: styles.cardInfo },
+                    h("div", { style: styles.showName }, show.name),
+                    h("div", { style: styles.showNetwork }, show.network)
+                  )
+                )
+              );
+            })
+          )
+    );
+
     return h("div", { style: styles.page },
       h("div", { style: styles.scanlines }),
       h("header", { style: styles.header }, headerLeft, headerRight),
       errorBanner,
-      dial,
-      h("main", { style: styles.main }, mainContent),
+      nowAiringOpen ? nowAiringScreen : h(React.Fragment, null, dial, h("main", { style: styles.main }, mainContent)),
       modal,
       detailModal
     );
@@ -723,7 +700,7 @@ window.addEventListener("error", function (e) {
     logoTitle: { fontFamily: "'JetBrains Mono', monospace", fontSize: 15, fontWeight: 700, letterSpacing: "0.12em", lineHeight: 1 },
     logoSub: { fontSize: 11, color: "#8B8FA3", marginTop: 3 },
     headerRight: { display: "flex", alignItems: "center", gap: 10, flex: 1 },
-    onAirBadge: { display: "flex", alignItems: "center", gap: 6, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, letterSpacing: "0.06em", color: "#FF4B3E", border: "1px solid rgba(255,75,62,0.4)", borderRadius: 20, padding: "5px 10px", background: "rgba(255,75,62,0.08)" },
+    onAirBadge: { display: "flex", alignItems: "center", gap: 6, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, letterSpacing: "0.06em", color: "#FF4B3E", border: "1px solid rgba(255,75,62,0.4)", borderRadius: 20, padding: "5px 10px", background: "rgba(255,75,62,0.08)", cursor: "pointer" },
     onAirDot: { width: 6, height: 6, borderRadius: "50%", background: "#FF4B3E", display: "inline-block", animation: "pulse 1s ease-in-out infinite alternate" },
     iconButton: { width: 34, height: 34, borderRadius: 8, border: "1px solid #2A2E3A", background: "#1B1E27", color: "#8B8FA3", display: "flex", alignItems: "center", justifyContent: "center" },
     iconButtonPlain: { background: "none", border: "none", color: "#8B8FA3", display: "flex" },
@@ -737,14 +714,15 @@ window.addEventListener("error", function (e) {
     dialDot: { width: 8, height: 8, borderRadius: "50%", flexShrink: 0 },
     dialLabel: { fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap" },
     dialCount: { fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: "#5A5F73" },
-    dialLight: { position: "absolute", top: 8, right: 8, width: 6, height: 6, borderRadius: "50%" },
     main: { padding: "0 24px", position: "relative", zIndex: 1 },
+    nowAiringHeader: { display: "flex", alignItems: "center", gap: 14, padding: "4px 0 18px" },
+    nowAiringTitle: { fontSize: 16, fontWeight: 700 },
+    backButton: { display: "flex", alignItems: "center", gap: 6, background: "none", border: "1px solid #2A2E3A", color: "#8B8FA3", borderRadius: 8, padding: "7px 12px", fontSize: 13 },
     emptyState: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "60px 20px", color: "#8B8FA3", textAlign: "center", gap: 4 },
     emptyTitle: { fontSize: 15, fontWeight: 600, color: "#EDEAE2", marginTop: 8 },
     emptySub: { fontSize: 13, color: "#8B8FA3" },
     grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 },
     card: { background: "#1B1E27", border: "1px solid #262A35", borderRadius: 12, padding: 14, position: "relative", display: "flex", flexDirection: "column", gap: 10 },
-    newBadge: { position: "absolute", top: -9, left: 12, background: "#FF4B3E", color: "#14161C", fontFamily: "'JetBrains Mono', monospace", fontSize: 9.5, fontWeight: 700, letterSpacing: "0.05em", padding: "3px 8px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" },
     cardTop: { display: "flex", gap: 12 },
     poster: { width: 56, height: 78, borderRadius: 6, objectFit: "cover", flexShrink: 0 },
     posterFallback: { width: 56, height: 78, borderRadius: 6, background: "#262A35", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
