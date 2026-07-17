@@ -26,7 +26,6 @@
     .qh-header { gap: 10px; }
     .qh-right { width: 100%; justify-content: space-between; gap: 8px; }
     .qh-actions { margin-left: 0; gap: 6px; }
-    .qh-airing-now-word { display: none; }
     .qh-airing-badge { padding: 5px 8px; font-size: 10px; }
   }
 </style>
@@ -493,9 +492,7 @@ window.addEventListener("error", function (e) {
     var headerRight = h("div", { className: "qh-right" },
       airingCount > 0 ? h("div", { className: "qh-airing-badge", style: styles.onAirBadge },
         h("span", { style: styles.onAirDot }),
-        airingCount + " ",
-        h("span", { className: "qh-airing-now-word" }, "Now "),
-        "Airing"
+        airingCount + " Airing"
       ) : null,
       h("div", { className: "qh-actions" },
         h("input", { ref: fileInputRef, type: "file", accept: "application/json", style: { display: "none" }, onChange: handleImportFile }),
